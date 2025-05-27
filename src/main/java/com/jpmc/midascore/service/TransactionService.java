@@ -1,12 +1,14 @@
-// TransactionService.java
 package com.jpmc.midascore.service;
 
 import java.util.Optional;
 
+import org.springframework.http.ResponseEntity;
 import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
 
 import com.jpmc.midascore.entity.TransactionRecord;
 import com.jpmc.midascore.entity.UserRecord;
+import com.jpmc.midascore.foundation.Incentive;
 import com.jpmc.midascore.foundation.Transaction;
 import com.jpmc.midascore.repository.TransactionRecordRepository;
 import com.jpmc.midascore.repository.UserRecordRepository;
@@ -15,10 +17,14 @@ import com.jpmc.midascore.repository.UserRecordRepository;
 public class TransactionService {
     private final UserRecordRepository userRepo;
     private final TransactionRecordRepository transactionRepo;
+    private final RestTemplate restTemplate;
 
-    public TransactionService(UserRecordRepository userRepo, TransactionRecordRepository transactionRepo) {
+    public TransactionService(UserRecordRepository userRepo,
+                              TransactionRecordRepository transactionRepo,
+                              RestTemplate restTemplate) {
         this.userRepo = userRepo;
         this.transactionRepo = transactionRepo;
+        this.restTemplate = restTemplate;
     }
 
     public void process(Transaction t) {
@@ -36,21 +42,35 @@ public class TransactionService {
             return; // insufficient balance
         }
 
+        // 💰 Deduct from sender
         sender.setBalance(sender.getBalance() - t.getAmount());
-        recipient.setBalance(recipient.getBalance() + t.getAmount());
 
+        // 📞 Call Incentive API
+        ResponseEntity<Incentive> response = restTemplate.postForEntity(
+            "http://localhost:8080/incentive",
+            t,
+            Incentive.class
+        );
+        float incentive = response.getBody().getAmount();
+
+        // Add to recipient (including incentive)
+        recipient.setBalance(recipient.getBalance() + t.getAmount() + incentive);
+
+        // Save users
         userRepo.save(sender);
         userRepo.save(recipient);
 
-        TransactionRecord record = new TransactionRecord(sender, recipient, t.getAmount());
+        // Save transaction record with incentive
+        TransactionRecord record = new TransactionRecord(sender, recipient, t.getAmount(), incentive);
         transactionRepo.save(record);
 
-        // LOG WALDORF BALANCE
-        Optional<UserRecord> waldorfOpt = userRepo.findAll().stream()
-                .filter(u -> u.getName().equalsIgnoreCase("waldorf"))
-                .findFirst();
+        // Log Wilbur’s balance if needed
+        Optional<UserRecord> wilburOpt = userRepo.findAll().stream()
+        .filter(u -> u.getName().equalsIgnoreCase("wilbur"))
+        .findFirst();
 
-        waldorfOpt.ifPresent(waldorf -> System.out.println("Waldorf's current balance: " + waldorf.getBalance()));
+        wilburOpt.ifPresent(wilbur -> System.out.println("Wilbur's final balance: " + wilbur.getBalance()));
     }
 }
+
 
